@@ -22,8 +22,35 @@ import random
 import json
 import threading
 import time
+import os
 from datetime import datetime, timedelta, date
+from pathlib import Path
 import pytz
+
+# ============================================================
+# CONTROLE PERSISTENTE (arquivo em disco, sobrevive a restarts)
+# ============================================================
+
+CONTROL_FILE = Path("/tmp/rosacruz_control.json")
+
+
+def load_control() -> dict:
+    """Carrega o arquivo de controle persistente."""
+    try:
+        if CONTROL_FILE.exists():
+            data = json.loads(CONTROL_FILE.read_text())
+            return data
+    except:
+        pass
+    return {"date": None, "sent": [], "random_times": []}
+
+
+def save_control(data: dict):
+    """Salva o arquivo de controle persistente."""
+    try:
+        CONTROL_FILE.write_text(json.dumps(data, ensure_ascii=False))
+    except:
+        pass
 
 # ============================================================
 # CONFIGURAÇÃO
@@ -309,27 +336,25 @@ def generate_random_times_for_today():
 # ============================================================
 
 def scheduler_loop():
-    """Loop do scheduler que roda em background."""
+    """Loop do scheduler que roda em background com controle persistente."""
     tz = get_tz()
-    today_random_times = []
-    current_date = None
-    sent_today = set()
 
     while True:
         now = datetime.now(tz)
-        today = now.date()
+        today_str = now.strftime("%Y-%m-%d")
+
+        # Carregar controle do disco (sobrevive a restarts)
+        control = load_control()
 
         # Novo dia: gerar novos horários aleatórios
-        if today != current_date:
-            current_date = today
-            today_random_times = generate_random_times_for_today()
-            sent_today = set()
-            # Log no session state (thread-safe com try/except)
-            try:
-                st.session_state["random_times_today"] = today_random_times
-                st.session_state["scheduler_date"] = str(current_date)
-            except:
-                pass
+        if control["date"] != today_str:
+            random_times = generate_random_times_for_today()
+            control = {
+                "date": today_str,
+                "sent": [],
+                "random_times": [[h, m] for h, m in random_times],
+            }
+            save_control(control)
 
         current_hm = (now.hour, now.minute)
 
@@ -337,30 +362,47 @@ def scheduler_loop():
         for schedule in FIXED_SCHEDULES:
             sched_time = schedule["time"]
             key = f"fixed_{sched_time[0]}_{sched_time[1]}"
-            if current_hm == sched_time and key not in sent_today:
-                sent_today.add(key)
+            if current_hm == sched_time and key not in control["sent"]:
                 try:
                     result = generate_and_send("fixed", schedule["sanctuary"], schedule["theme"])
-                    log_entry = st.session_state.get("log", [])
-                    log_entry.append(result)
-                    st.session_state["log"] = log_entry[-20:]  # manter últimas 20
+                    control["sent"].append(key)
+                    save_control(control)
+                    # Também salvar no session_state para a UI
+                    try:
+                        log_entry = st.session_state.get("log", [])
+                        log_entry.append(result)
+                        st.session_state["log"] = log_entry[-20:]
+                    except:
+                        pass
                 except Exception as e:
                     pass
 
         # Verificar horários aleatórios
-        for i, rand_time in enumerate(today_random_times):
-            key = f"random_{rand_time[0]}_{rand_time[1]}"
-            if current_hm == rand_time and key not in sent_today:
-                sent_today.add(key)
+        for i, rand_time in enumerate(control.get("random_times", [])):
+            rt = tuple(rand_time)
+            key = f"random_{rt[0]}_{rt[1]}"
+            if current_hm == rt and key not in control["sent"]:
                 try:
                     result = generate_and_send("random")
-                    log_entry = st.session_state.get("log", [])
-                    log_entry.append(result)
-                    st.session_state["log"] = log_entry[-20:]
+                    control["sent"].append(key)
+                    save_control(control)
+                    try:
+                        log_entry = st.session_state.get("log", [])
+                        log_entry.append(result)
+                        st.session_state["log"] = log_entry[-20:]
+                    except:
+                        pass
                 except Exception as e:
                     pass
 
-        # Dormir 30 segundos (verifica 2x por minuto)
+        # Atualizar session_state para a UI
+        try:
+            st.session_state["random_times_today"] = [tuple(rt) for rt in control.get("random_times", [])]
+            st.session_state["scheduler_date"] = control["date"]
+        except:
+            pass
+
+        # Dormir 30 segundos
         time.sleep(30)
 
 
@@ -444,6 +486,10 @@ def main():
             st.markdown(f"- {emoji} `{h:02d}:{m:02d}` — {s['sanctuary'].title()} ({s['theme']})")
 
         random_times = st.session_state.get("random_times_today", [])
+        if not random_times:
+            # Fallback: ler do arquivo de controle persistente
+            control = load_control()
+            random_times = [tuple(rt) for rt in control.get("random_times", [])]
         if random_times:
             st.markdown("**Aleatórios:**")
             for rt in random_times:
