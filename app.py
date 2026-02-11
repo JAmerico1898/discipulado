@@ -28,10 +28,15 @@ from pathlib import Path
 import pytz
 
 # ============================================================
-# CONTROLE PERSISTENTE (arquivo em disco, sobrevive a restarts)
+# CONTROLE PERSISTENTE COM LOCK (previne duplicatas)
 # ============================================================
 
 CONTROL_FILE = Path("/tmp/rosacruz_control.json")
+LOCK_FILE = Path("/tmp/rosacruz_scheduler.lock")
+THREAD_LOCK = threading.Lock()
+
+# Flag global (sobrevive a session_state resets dentro do mesmo processo)
+_scheduler_started = False
 
 
 def load_control() -> dict:
@@ -51,6 +56,20 @@ def save_control(data: dict):
         CONTROL_FILE.write_text(json.dumps(data, ensure_ascii=False))
     except:
         pass
+
+
+def mark_as_sent(key: str) -> bool:
+    """
+    Marca uma mensagem como enviada de forma thread-safe.
+    Retorna True se foi marcada agora (primeira vez), False se já existia.
+    """
+    with THREAD_LOCK:
+        control = load_control()
+        if key in control["sent"]:
+            return False  # já foi enviada
+        control["sent"].append(key)
+        save_control(control)
+        return True  # marcada agora, pode enviar
 
 # ============================================================
 # CONFIGURAÇÃO
@@ -336,25 +355,26 @@ def generate_random_times_for_today():
 # ============================================================
 
 def scheduler_loop():
-    """Loop do scheduler que roda em background com controle persistente."""
+    """Loop do scheduler com controle atômico de envios."""
     tz = get_tz()
 
     while True:
         now = datetime.now(tz)
         today_str = now.strftime("%Y-%m-%d")
 
-        # Carregar controle do disco (sobrevive a restarts)
-        control = load_control()
+        # Carregar controle
+        with THREAD_LOCK:
+            control = load_control()
 
-        # Novo dia: gerar novos horários aleatórios
-        if control["date"] != today_str:
-            random_times = generate_random_times_for_today()
-            control = {
-                "date": today_str,
-                "sent": [],
-                "random_times": [[h, m] for h, m in random_times],
-            }
-            save_control(control)
+            # Novo dia: gerar novos horários aleatórios
+            if control["date"] != today_str:
+                random_times = generate_random_times_for_today()
+                control = {
+                    "date": today_str,
+                    "sent": [],
+                    "random_times": [[h, m] for h, m in random_times],
+                }
+                save_control(control)
 
         current_hm = (now.hour, now.minute)
 
@@ -362,60 +382,61 @@ def scheduler_loop():
         for schedule in FIXED_SCHEDULES:
             sched_time = schedule["time"]
             key = f"fixed_{sched_time[0]}_{sched_time[1]}"
-            if current_hm == sched_time and key not in control["sent"]:
-                try:
-                    result = generate_and_send("fixed", schedule["sanctuary"], schedule["theme"])
-                    control["sent"].append(key)
-                    save_control(control)
-                    # Também salvar no session_state para a UI
+            if current_hm == sched_time:
+                # mark_as_sent é atômico: só retorna True uma vez
+                if mark_as_sent(key):
                     try:
-                        log_entry = st.session_state.get("log", [])
-                        log_entry.append(result)
-                        st.session_state["log"] = log_entry[-20:]
-                    except:
+                        result = generate_and_send("fixed", schedule["sanctuary"], schedule["theme"])
+                        try:
+                            log_entry = st.session_state.get("log", [])
+                            log_entry.append(result)
+                            st.session_state["log"] = log_entry[-20:]
+                        except:
+                            pass
+                    except Exception as e:
                         pass
-                except Exception as e:
-                    pass
 
         # Verificar horários aleatórios
+        control = load_control()
         for i, rand_time in enumerate(control.get("random_times", [])):
             rt = tuple(rand_time)
             key = f"random_{rt[0]}_{rt[1]}"
-            if current_hm == rt and key not in control["sent"]:
-                try:
-                    result = generate_and_send("random")
-                    control["sent"].append(key)
-                    save_control(control)
+            if current_hm == rt:
+                if mark_as_sent(key):
                     try:
-                        log_entry = st.session_state.get("log", [])
-                        log_entry.append(result)
-                        st.session_state["log"] = log_entry[-20:]
-                    except:
+                        result = generate_and_send("random")
+                        try:
+                            log_entry = st.session_state.get("log", [])
+                            log_entry.append(result)
+                            st.session_state["log"] = log_entry[-20:]
+                        except:
+                            pass
+                    except Exception as e:
                         pass
-                except Exception as e:
-                    pass
 
         # Atualizar session_state para a UI
         try:
+            control = load_control()
             st.session_state["random_times_today"] = [tuple(rt) for rt in control.get("random_times", [])]
             st.session_state["scheduler_date"] = control["date"]
         except:
             pass
 
-        # Dormir 30 segundos
-        time.sleep(30)
+        # Dormir 45 segundos (garante no máximo 2 checks por minuto)
+        time.sleep(45)
 
 
 def start_scheduler():
-    """Inicia o scheduler em uma thread daemon."""
-    if "scheduler_running" not in st.session_state:
-        st.session_state["scheduler_running"] = False
+    """Inicia o scheduler — usa flag global para garantir apenas UMA thread no processo."""
+    global _scheduler_started
 
-    if not st.session_state["scheduler_running"]:
+    if not _scheduler_started:
+        _scheduler_started = True
         thread = threading.Thread(target=scheduler_loop, daemon=True)
         thread.start()
-        st.session_state["scheduler_running"] = True
         st.session_state["scheduler_started_at"] = now_local().strftime("%Y-%m-%d %H:%M:%S")
+
+    st.session_state["scheduler_running"] = True
 
 
 # ============================================================
