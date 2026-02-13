@@ -110,6 +110,7 @@ CONCEITOS-CHAVE DA ROSACRUZ ÁUREA:
 - A Fraternidade Universal: a corrente de forças espirituais que sustenta o trabalho da Escola
 - O Átomo-Centelha Primordial: semente divina adormecida no coração humano
 - O Campo Magnético da Escola: proteção e nutrição espiritual para os alunos no caminho
+- A Gnose universal quíntupla: discernimento claro; anseio de salvação; perfeita auto-rendição; nova atitude de vida; acolhimento direto no novo campo de vida.
 
 CONEXÕES COM OUTRAS TRADIÇÕES:
 - Budismo: a impermanência, o desapego, a natureza búdica interior (comparável à Rosa do Coração)
@@ -198,7 +199,7 @@ A mensagem deve:
 
 
 def get_prompt_for_random():
-    """Gera o prompt para mensagens aleatórias (até 8 frases, 3 santuários)."""
+    """Gera o prompt para mensagens aleatórias (até 7 frases, 3 santuários)."""
 
     themes = [
         "a unidade dos três santuários no caminho de transfiguração",
@@ -228,7 +229,7 @@ def get_prompt_for_random():
     chosen_theme = random.choice(themes)
     chosen_connection = random.choice(connections)
 
-    return f"""Gere uma mensagem de reflexão espiritual integradora (6-8 frases) que conecte os TRÊS santuários simultaneamente:
+    return f"""Gere uma mensagem de reflexão espiritual integradora (6-7 frases) que conecte os TRÊS santuários simultaneamente:
 - Santuário da CABEÇA (pensamento renovado, intenção)
 - Santuário do CORAÇÃO (sentimento purificado, a Rosa)
 - Santuário da PÉLVIS (vontade dirigida, ação consciente)
@@ -240,7 +241,7 @@ A mensagem deve:
 - Ser dirigida diretamente ao leitor (você)
 - Mostrar como os três centros trabalham juntos na ligação com o Corpo Vivo
 - Ser profunda mas acessível
-- Ter entre 6-8 frases
+- Ter entre 6-7 frases
 - MÁXIMO DE 900 CARACTERES NO TOTAL (isso é crítico, a mensagem será cortada se ultrapassar)
 - NÃO incluir saudações
 - NÃO incluir títulos ou cabeçalhos
